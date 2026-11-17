@@ -1,0 +1,56 @@
+# Publishes this fork to GitHub Packages as `@technweb/hubspot-api-client`, already built (`lib/`).
+#
+# Why: every IdealData service used to install this fork straight from GitHub (`github:TechNWeb/hubspot-api-nodejs`),
+# and npm "prepares" a git dependency by cloning it and running a full install of its dev tools (TypeScript, jasmine,
+# eslint …) inside every Docker build stage, uncached. A network drop there failed production deploys
+# (idealdata3-searchconsole, 2026-11-17: "git dep preparation failed … ECONNRESET"). A published package is one tarball
+# from the registry core already comes from. Core depends on it through an npm alias, so no import changes:
+#   "@hubspot/api-client": "npm:@technweb/hubspot-api-client@<version>"
+#
+# Run: Actions ▸ Publish package ▸ Run workflow (on the commit to publish). The version is package.json's; a version
+# already published is refused by the registry — bump it first. A prerelease version (e.g. 11.2.0-powersync.3) is
+# published under the `powersync` dist-tag, as npm requires one for a prerelease.
+name: Publish package
+
+on:
+    workflow_dispatch:
+
+permissions:
+    contents: read
+    packages: write
+
+jobs:
+    publish:
+        runs-on: ubuntu-latest
+        steps:
+            - uses: actions/checkout@v4
+
+            - uses: actions/setup-node@v4
+              with:
+                  node-version: '20'
+                  registry-url: https://npm.pkg.github.com
+                  scope: '@technweb'
+
+            # `prepare` builds `lib/` and stamps the version into it.
+            - name: Install and build
+              run: npm ci
+
+            - name: Name it for our registry
+              run: |
+                  npm pkg set name=@technweb/hubspot-api-client
+                  npm pkg set repository.url=git+https://github.com/TechNWeb/hubspot-api-nodejs.git
+                  npm pkg set publishConfig.registry=https://npm.pkg.github.com
+
+            - name: Check the package holds the built library
+              run: |
+                  test -f lib/index.js
+                  test -f lib/index.d.ts
+                  npm pack --dry-run 2>&1 | tail -5
+
+            - name: Publish
+              run: |
+                  VERSION=$(node -p "require('./package.json').version")
+                  if [[ "$VERSION" == *-* ]]; then TAG=powersync; else TAG=latest; fi
+                  npm publish --tag "$TAG" --ignore-scripts
+              env:
+                  NODE_AUTH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
